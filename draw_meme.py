@@ -1,303 +1,342 @@
 #!/usr/bin/env python3
-"""GTA 6 x make.fun meme, Harvest Moon style.
+"""GTA 6 x make.fun meme, Roblox style. Procedural PIL, deterministic."""
 
-Draws a cozy farm scene on a 256x256 pixel grid with a soft pastel palette,
-then upscales x4 with nearest-neighbour to 1024x1024. Fully procedural:
-no external assets, deterministic output.
-"""
-
+import math
 from PIL import Image, ImageDraw, ImageFont
 
-GRID = 256          # low-res pixel grid
-SCALE = 4           # upscale factor -> 1024x1024
-OUT = "meme.png"
+W = H = 1024
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-# --- soft pastel palette -------------------------------------------------
-SKY_TOP   = (135, 206, 250)   # light sky blue
-SKY_LOW   = (198, 232, 255)   # pale horizon blue
-CLOUD     = (255, 255, 255)
-CLOUD_SH  = (222, 238, 250)
-HILL_FAR  = (168, 220, 150)   # distant rolling hill
-HILL_NEAR = (126, 199, 110)   # near hill
-FIELD_A   = (110, 190,  95)   # crop field light row
-FIELD_B   = ( 88, 168,  80)   # crop field dark row
-SPROUT    = ( 60, 140,  60)   # crop sprouts
-SOIL      = (150, 108,  72)   # dirt path
-SOIL_DK   = (120,  84,  54)
-WOOD      = (170, 120,  75)   # fence / sign wood
-WOOD_DK   = (130,  88,  50)
-ROOF      = (200,  70,  60)   # barn red roof
-WALL      = (245, 235, 210)   # barn cream wall
-WHITE     = (255, 255, 255)
-GHOST_SH  = (225, 232, 245)   # ghost soft shading
-STRAW     = (240, 205, 105)   # straw hat
-STRAW_DK  = (205, 168,  70)
-CHEEK     = (255, 160, 175)   # rosy cheeks
-INK       = ( 45,  40,  55)   # outlines / eyes
-GOLD      = (250, 200,  60)   # coins / stars
-GOLD_DK   = (205, 150,  30)
-SACK      = (214, 176, 110)   # coin sack
-SACK_DK   = (168, 132,  76)
-COW_SPOT  = ( 90,  75,  70)
-PINK      = (255, 180, 190)   # cow nose
-TEXT_FILL = (255, 255, 255)
-TEXT_EDGE = ( 40,  55,  45)   # dark green text outline
+# --- palette (bright Roblox-ish) ---
+SKY_TOP = (63, 169, 245)
+SKY_BOT = (174, 233, 255)
+SUN = (255, 217, 61)
+SUN_EDGE = (255, 184, 0)
+CLOUD = (255, 255, 255)
+CLOUD_EDGE = (190, 220, 240)
+INK = (26, 26, 46)
+WHITE = (255, 255, 255)
+PLATE = (88, 179, 104)
+PLATE_DARK = (62, 140, 78)
+STUD = (126, 212, 145)
+STUD_RIM = (70, 150, 85)
+ROAD = (99, 110, 114)
+ROAD_EDGE = (70, 78, 82)
+TRUNK = (176, 137, 104)
+TRUNK_DARK = (146, 109, 79)
+FROND = (46, 204, 113)
+FROND_DARK = (39, 174, 96)
+CAP_RED = (230, 57, 70)
+CAP_DARK = (190, 35, 50)
+CHEEK = (255, 150, 168)
+BAG = (233, 196, 106)
+BAG_DARK = (199, 160, 74)
+DOLLAR = (42, 120, 70)
+PANTS = (52, 73, 94)
+SHOE = (26, 26, 46)
+STAR_Y = (255, 200, 0)
+STAR_EDGE = (200, 140, 0)
 
 
-def px_rect(d, box, fill):
-    d.rectangle(box, fill=fill)
+def font(size):
+    return ImageFont.truetype(FONT_PATH, size)
 
 
-def draw_cloud(d, x, y, s):
-    """Fluffy cloud made of overlapping circles + soft shadow base."""
-    d.ellipse([x, y + 3 * s, x + 16 * s, y + 8 * s], fill=CLOUD_SH)
-    d.ellipse([x + 1 * s, y + 2 * s, x + 9 * s, y + 7 * s], fill=CLOUD)
-    d.ellipse([x + 5 * s, y, x + 14 * s, y + 6 * s], fill=CLOUD)
-    d.ellipse([x + 10 * s, y + 2 * s, x + 16 * s, y + 7 * s], fill=CLOUD)
+def fit_font(draw, text, max_w, start=110):
+    size = start
+    while size > 10:
+        f = font(size)
+        box = draw.textbbox((0, 0), text, font=f, stroke_width=8)
+        if box[2] - box[0] <= max_w:
+            return f
+        size -= 4
+    return font(10)
 
 
-def draw_background(d):
-    # sky: gentle two-band gradient
-    for y in range(0, 120):
-        t = y / 119.0
-        c = tuple(int(SKY_TOP[i] + (SKY_LOW[i] - SKY_TOP[i]) * t) for i in range(3))
-        d.line([(0, y), (GRID - 1, y)], fill=c)
-    # sun: soft warm disc top-left
-    d.ellipse([14, 10, 46, 42], fill=(255, 236, 150))
-    d.ellipse([19, 15, 41, 37], fill=(255, 246, 190))
-    # clouds
-    draw_cloud(d, 60, 14, 2)
-    draw_cloud(d, 150, 8, 2)
-    draw_cloud(d, 205, 30, 1)
-    draw_cloud(d, 100, 34, 1)
-    # rolling hills (layered ellipses)
-    d.ellipse([-60, 78, 150, 160], fill=HILL_FAR)
-    d.ellipse([90, 84, 330, 170], fill=HILL_FAR)
-    d.ellipse([-80, 104, 170, 200], fill=HILL_NEAR)
-    d.ellipse([120, 110, 360, 210], fill=HILL_NEAR)
-    # crop field: alternating rows with sprouts, bottom half
-    row_h = 9
-    y = 150
-    i = 0
-    while y < 216:
-        px_rect(d, [0, y, GRID - 1, y + row_h - 1], FIELD_A if i % 2 == 0 else FIELD_B)
-        # sprouts along the row
-        for x in range(6 + (i % 2) * 5, GRID - 4, 11):
-            d.line([(x, y + row_h - 2), (x, y + 3)], fill=SPROUT)
-            d.point((x - 1, y + 3), fill=SPROUT)
-            d.point((x + 1, y + 3), fill=SPROUT)
-        y += row_h
-        i += 1
-    # dirt path at the very bottom (under the bottom text band)
-    px_rect(d, [0, 216, GRID - 1, GRID - 1], SOIL)
-    for x in range(4, GRID - 4, 13):
-        d.point((x, 226), fill=SOIL_DK)
-        d.point((x + 6, 238), fill=SOIL_DK)
-        d.point((x + 2, 249), fill=SOIL_DK)
+def outlined_text(draw, cx, y, text, f, fill=WHITE, stroke=INK, sw=9):
+    box = draw.textbbox((0, 0), text, font=f, stroke_width=sw)
+    w = box[2] - box[0]
+    draw.text((cx - w / 2 - box[0], y), text, font=f, fill=fill,
+              stroke_width=sw, stroke_fill=stroke)
+    return box[3] - box[1]
 
 
-def draw_fence(d, y):
-    """Wooden farm fence running across the field."""
-    # horizontal rails
-    px_rect(d, [0, y + 3, GRID - 1, y + 5], WOOD)
-    px_rect(d, [0, y + 9, GRID - 1, y + 11], WOOD)
-    # posts
-    for x in range(4, GRID - 4, 22):
-        px_rect(d, [x, y, x + 4, y + 15], WOOD_DK)
-        px_rect(d, [x, y, x + 4, y + 1], WOOD)
+def rrect(draw, box, r, fill, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline, width=width)
 
 
-def draw_barn(d, x, y):
-    """Small barn with red roof. (x, y) = top-left of the roof."""
-    # walls
-    px_rect(d, [x + 4, y + 16, x + 44, y + 44], WALL)
-    # roof: stepped pixel gable
-    for i in range(9):
-        inset = i * 2
-        px_rect(d, [x + inset, y + i * 2, x + 48 - inset, y + i * 2 + 1], ROOF)
-    px_rect(d, [x + 16, y, x + 32, y + 1], ROOF)
-    # door with cross brace
-    px_rect(d, [x + 17, y + 26, x + 31, y + 44], WOOD_DK)
-    d.line([(x + 17, y + 26), (x + 31, y + 44)], fill=WOOD)
-    d.line([(x + 31, y + 26), (x + 17, y + 44)], fill=WOOD)
-    # window
-    px_rect(d, [x + 8, y + 22, x + 13, y + 27], (150, 200, 235))
-    px_rect(d, [x + 35, y + 22, x + 40, y + 27], (150, 200, 235))
-
-
-def draw_cow(d, x, y):
-    """Tiny chibi cow. (x, y) = top-left of the body."""
-    # body
-    px_rect(d, [x, y + 4, x + 26, y + 16], WHITE)
-    d.ellipse([x + 5, y + 6, x + 13, y + 12], fill=COW_SPOT)
-    d.ellipse([x + 16, y + 10, x + 23, y + 15], fill=COW_SPOT)
-    # head
-    px_rect(d, [x + 24, y, x + 36, y + 12], WHITE)
-    d.ellipse([x + 27, y + 1, x + 32, y + 5], fill=COW_SPOT)
-    # ears + horns
-    px_rect(d, [x + 22, y + 2, x + 25, y + 5], PINK)
-    px_rect(d, [x + 35, y + 2, x + 38, y + 5], PINK)
-    d.point((x + 26, y - 1), fill=(240, 230, 200))
-    d.point((x + 34, y - 1), fill=(240, 230, 200))
-    # muzzle
-    px_rect(d, [x + 28, y + 8, x + 36, y + 12], PINK)
-    d.point((x + 30, y + 10), fill=COW_SPOT)
-    d.point((x + 34, y + 10), fill=COW_SPOT)
-    # eye
-    d.point((x + 29, y + 5), fill=INK)
-    # legs
-    for lx in (x + 2, x + 8, x + 18, x + 23):
-        px_rect(d, [lx, y + 16, lx + 3, y + 21], WHITE)
-        px_rect(d, [lx, y + 20, lx + 3, y + 21], COW_SPOT)
-    # tail
-    d.line([(x, y + 5), (x - 3, y + 13)], fill=COW_SPOT)
-
-
-def draw_chicken(d, x, y):
-    """Tiny chicken. (x, y) = top-left of the body."""
-    d.ellipse([x, y + 3, x + 11, y + 11], fill=WHITE)
-    d.ellipse([x + 7, y, x + 13, y + 6], fill=WHITE)          # head
-    px_rect(d, [x + 9, y - 2, x + 11, y], (235, 80, 80))      # comb
-    d.point((x + 13, y + 3), fill=GOLD)                        # beak
-    d.point((x + 10, y + 3), fill=INK)                         # eye
-    d.line([(x + 4, y + 11), (x + 4, y + 14)], fill=GOLD_DK)  # legs
-    d.line([(x + 8, y + 11), (x + 8, y + 14)], fill=GOLD_DK)
-
-
-def draw_ghost_farmer(d, cx, cy):
-    """The make.fun ghost as a cute farmer with straw hat + coin sack.
-
-    (cx, cy) = centre of the ghost body. Body ~44px wide, 46px tall.
-    """
-    x0, y0 = cx - 22, cy - 23
-    x1, y1 = cx + 22, cy + 23
-    # coin sack first (behind the arm, at ghost's left hand)
-    sx, sy = x0 - 16, cy + 2
-    d.ellipse([sx, sy, sx + 24, sy + 26], fill=SACK)
-    px_rect(d, [sx + 8, sy - 5, sx + 16, sy + 2], SACK_DK)      # tied top
-    d.ellipse([sx + 4, sy + 4, sx + 12, sy + 12], fill=(232, 200, 140))  # shine
-    # gold coins spilling from the sack top
-    for (gx, gy) in [(sx + 6, sy - 8), (sx + 12, sy - 10), (sx + 17, sy - 7)]:
-        d.ellipse([gx, gy, gx + 5, gy + 5], fill=GOLD)
-        d.point((gx + 2, gy + 2), fill=GOLD_DK)
-    # $ on the sack
-    font = ImageFont.truetype(FONT_PATH, 13)
-    d.text((sx + 7, sy + 7), "$", font=font, fill=GOLD_DK)
-    # ghost body: rounded top, wavy bottom hem
-    d.pieslice([x0, y0, x1, y0 + 44], 180, 360, fill=WHITE)
-    px_rect(d, [x0, y0 + 22, x1, y1 - 6], WHITE)
-    for i in range(4):  # wavy hem bumps
-        bx = x0 + i * 11
-        d.pieslice([bx, y1 - 12, bx + 11, y1], 0, 180, fill=WHITE)
-    # soft shading on the right side
-    d.pieslice([x1 - 12, y0 + 2, x1 - 1, y0 + 40], 270, 360, fill=GHOST_SH)
-    # outline
-    d.arc([x0, y0, x1, y0 + 44], 180, 360, fill=INK)
-    d.line([(x0, y0 + 22), (x0, y1 - 6)], fill=INK)
-    d.line([(x1, y0 + 22), (x1, y1 - 6)], fill=INK)
-    # straw hat: brim + crown, tilted on top of the head
-    d.ellipse([cx - 26, y0 - 3, cx + 26, y0 + 6], fill=STRAW)
-    d.ellipse([cx - 26, y0 - 3, cx + 26, y0 + 6], outline=STRAW_DK)
-    d.pieslice([cx - 13, y0 - 13, cx + 13, y0 + 5], 180, 360, fill=STRAW)
-    d.arc([cx - 13, y0 - 13, cx + 13, y0 + 5], 180, 360, fill=STRAW_DK)
-    px_rect(d, [cx - 13, y0 - 2, cx + 13, y0 + 1], (200, 90, 80))  # hat band
-    # face: happy closed eyes, smile, rosy cheeks
-    d.arc([cx - 13, cy - 8, cx - 5, cy - 1], 200, 340, fill=INK)
-    d.arc([cx + 5, cy - 8, cx + 13, cy - 1], 200, 340, fill=INK)
-    d.arc([cx - 5, cy - 2, cx + 5, cy + 6], 20, 160, fill=INK)
-    d.ellipse([cx - 17, cy - 1, cx - 10, cy + 4], fill=CHEEK)
-    d.ellipse([cx + 10, cy - 1, cx + 17, cy + 4], fill=CHEEK)
-    # little arm reaching to the sack
-    d.line([(x0 + 2, cy + 8), (sx + 20, sy + 8)], fill=WHITE, width=4)
-    d.line([(x0 + 2, cy + 8), (sx + 20, sy + 8)], fill=INK, width=1)
-    d.ellipse([sx + 17, sy + 5, sx + 23, sy + 11], fill=WHITE, outline=INK)
-
-
-def draw_star(d, cx, cy, r, fill=GOLD, edge=GOLD_DK):
-    """Five-pointed star (GTA wanted star)."""
-    import math
+def star(draw, cx, cy, r, fill=STAR_Y, outline=STAR_EDGE, width=4):
     pts = []
     for i in range(10):
-        ang = -math.pi / 2 + i * math.pi / 5
         rad = r if i % 2 == 0 else r * 0.45
-        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
-    d.polygon(pts, fill=fill, outline=edge)
+        a = -math.pi / 2 + i * math.pi / 5
+        pts.append((cx + rad * math.cos(a), cy + rad * math.sin(a)))
+    draw.polygon(pts, fill=fill, outline=outline, width=width)
 
 
-def draw_sign(d, x, y):
-    """Wooden farm sign with mini ghost + 'make.fun'. (x, y) = board top-left."""
-    # posts
-    px_rect(d, [x + 6, y + 26, x + 10, y + 44], WOOD_DK)
-    px_rect(d, [x + 62, y + 26, x + 66, y + 44], WOOD_DK)
-    # board with plank lines
-    px_rect(d, [x, y, x + 72, y + 28], (196, 150, 96))
-    d.rectangle([x, y, x + 72, y + 28], outline=WOOD_DK)
-    d.line([(x, y + 9), (x + 72, y + 9)], fill=WOOD_DK)
-    d.line([(x, y + 19), (x + 72, y + 19)], fill=WOOD_DK)
-    # mini ghost on the left of the board
-    gx, gy = x + 5, y + 5
-    d.pieslice([gx, gy, gx + 14, gy + 14], 180, 360, fill=WHITE)
-    px_rect(d, [gx, gy + 7, gx + 14, gy + 16], WHITE)
-    for i in range(2):
-        d.pieslice([gx + i * 7, gy + 12, gx + i * 7 + 7, gy + 18], 0, 180, fill=WHITE)
-    d.arc([gx, gy, gx + 14, gy + 14], 180, 360, fill=INK)
-    d.point((gx + 4, gy + 8), fill=INK)
-    d.point((gx + 10, gy + 8), fill=INK)
-    d.arc([gx + 4, gy + 8, gx + 10, gy + 13], 20, 160, fill=INK)
-    # text
-    font = ImageFont.truetype(FONT_PATH, 10)
-    d.text((x + 19, y + 9), "make.fun", font=font, fill=(70, 45, 25))
+def blocky_cloud(draw, cx, cy, s=1.0):
+    # cluster of rectangles = blocky Roblox cloud
+    boxes = [(-70, -18, 70, 22), (-45, -38, 10, -10), (5, -30, 55, -6), (-30, 8, 40, 26)]
+    for (x0, y0, x1, y1) in boxes:
+        rrect(draw, (cx + x0 * s, cy + y0 * s, cx + x1 * s, cy + y1 * s), 10 * s,
+              CLOUD, outline=CLOUD_EDGE, width=3)
 
 
-def pixel_text(img, text, cx, y, size, fill=TEXT_FILL, edge=TEXT_EDGE):
-    """Render text as crisp pixel lettering via a thresholded mask.
+def building(draw, x, base_y, w, h, color, edge):
+    rrect(draw, (x, base_y - h, x + w, base_y), 6, color, outline=edge, width=5)
+    # window grid
+    cols = max(2, w // 34)
+    rows = max(2, h // 40)
+    for c in range(cols):
+        for r in range(rows):
+            wx = x + 10 + c * ((w - 20) / cols)
+            wy = base_y - h + 12 + r * ((h - 24) / rows)
+            lit = (c * 7 + r * 3) % 3 != 0
+            draw.rectangle((wx, wy, wx + 16, wy + 20),
+                           fill=(255, 243, 176) if lit else (45, 52, 54),
+                           outline=edge, width=2)
 
-    Returns the height consumed (in grid pixels).
-    """
-    font = ImageFont.truetype(FONT_PATH, size)
-    mask = Image.new("L", (GRID, GRID), 0)
-    md = ImageDraw.Draw(mask)
-    tw = md.textlength(text, font=font)
-    md.text((cx - tw / 2, y), text, font=font, fill=255)
-    mask = mask.point(lambda p: 255 if p > 110 else 0)
-    # outline: paste the mask shifted in 8 directions in the edge colour
-    edge_img = Image.new("RGBA", (GRID, GRID), edge + (255,))
-    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1),
-                   (-1, -1), (1, -1), (-1, 1), (1, 1)]:
-        img.paste(edge_img, (dx, dy), mask)
-    fill_img = Image.new("RGBA", (GRID, GRID), fill + (255,))
-    img.paste(fill_img, (0, 0), mask)
-    bbox = font.getbbox(text)
-    return bbox[3] - bbox[1] + 2
+
+def palm(draw, x, base_y, h=210, flip=1):
+    # segmented blocky trunk leaning slightly
+    seg = 6
+    seg_h = h / seg
+    lean = 26 * flip
+    for i in range(seg):
+        t = i / seg
+        cx = x + lean * t * t
+        wdt = 30 - 10 * t
+        y0 = base_y - (i + 1) * seg_h
+        y1 = base_y - i * seg_h
+        rrect(draw, (cx - wdt / 2, y0, cx + wdt / 2, y1 + 2), 5,
+              TRUNK if i % 2 == 0 else TRUNK_DARK, outline=INK, width=3)
+    top_x = x + lean
+    top_y = base_y - h
+    # flat fronds as tapered polygons
+    for ang, ln in [(-160, 105), (-115, 120), (-70, 125), (-25, 115), (15, 100), (55, 80)]:
+        a = math.radians(ang)
+        tip = (top_x + ln * math.cos(a), top_y + ln * math.sin(a) + 18)
+        mid = (top_x + ln * 0.55 * math.cos(a), top_y + ln * 0.55 * math.sin(a) - 14)
+        perp = a + math.pi / 2
+        w0 = 13
+        p1 = (top_x + w0 * math.cos(perp), top_y + w0 * math.sin(perp))
+        p2 = (top_x - w0 * math.cos(perp), top_y - w0 * math.sin(perp))
+        draw.polygon([p1, mid, tip, p2], fill=FROND, outline=FROND_DARK, width=3)
+    # coconuts
+    for dx, dy in [(-10, 8), (12, 10), (0, 18)]:
+        draw.ellipse((top_x + dx - 9, top_y + dy - 9, top_x + dx + 9, top_y + dy + 9),
+                     fill=(120, 85, 50), outline=INK, width=3)
+
+
+def baseplate(draw, y0, y1):
+    draw.rectangle((0, y0, W, y1), fill=PLATE)
+    draw.rectangle((0, y0, W, y0 + 8), fill=PLATE_DARK)
+    # studs with simple perspective: rows grow toward the viewer
+    rows = 5
+    for r in range(rows):
+        t = r / (rows - 1)
+        cy = y0 + 26 + t * (y1 - y0 - 44)
+        rad = 9 + 9 * t
+        step = 64 + 26 * t
+        offset = (r % 2) * step / 2
+        x = -step + offset
+        while x < W + step:
+            draw.ellipse((x - rad, cy - rad * 0.62, x + rad, cy + rad * 0.62),
+                         fill=STUD, outline=STUD_RIM, width=3)
+            draw.ellipse((x - rad * 0.55, cy - rad * 0.38, x + rad * 0.55, cy + rad * 0.1),
+                         fill=(170, 232, 184))
+            x += step
+
+
+def road(draw, y0, y1):
+    draw.rectangle((0, y0, W, y1), fill=ROAD)
+    draw.rectangle((0, y0, W, y0 + 6), fill=ROAD_EDGE)
+    draw.rectangle((0, y1 - 6, W, y1), fill=ROAD_EDGE)
+    cy = (y0 + y1) / 2
+    x = 20
+    while x < W:
+        rrect(draw, (x, cy - 7, x + 64, cy + 7), 6, WHITE)
+        x += 118
+
+
+def money_bag(draw, cx, cy, s=1.0):
+    # tied sack
+    draw.polygon([(cx - 20 * s, cy - 62 * s), (cx + 20 * s, cy - 62 * s),
+                  (cx + 8 * s, cy - 34 * s), (cx - 8 * s, cy - 34 * s)],
+                 fill=BAG_DARK, outline=INK, width=4)
+    draw.ellipse((cx - 52 * s, cy - 40 * s, cx + 52 * s, cy + 62 * s),
+                 fill=BAG, outline=INK, width=5)
+    draw.rectangle((cx - 26 * s, cy - 44 * s, cx + 26 * s, cy - 30 * s),
+                   fill=BAG_DARK, outline=INK, width=3)
+    f = font(int(62 * s))
+    box = draw.textbbox((0, 0), "$", font=f)
+    draw.text((cx - (box[2] - box[0]) / 2 - box[0], cy - 26 * s), "$",
+              font=f, fill=DOLLAR)
+
+
+def mini_ghost(draw, cx, cy, s=1.0):
+    # small ghost logo mark: dome head, wavy bottom
+    wdt, hgt = 56 * s, 64 * s
+    x0, y0, x1, y1 = cx - wdt / 2, cy - hgt / 2, cx + wdt / 2, cy + hgt / 2
+    draw.pieslice((x0, y0, x1, y0 + wdt), 180, 360, fill=WHITE, outline=INK, width=4)
+    draw.rectangle((x0, y0 + wdt / 2, x1, y1 - 8 * s), fill=WHITE)
+    draw.line((x0, y0 + wdt / 2, x0, y1 - 8 * s), fill=INK, width=4)
+    draw.line((x1, y0 + wdt / 2, x1, y1 - 8 * s), fill=INK, width=4)
+    # wavy bottom
+    wave = []
+    n = 24
+    for i in range(n + 1):
+        t = i / n
+        wave.append((x0 + t * wdt, y1 - 8 * s + 8 * s * abs(math.sin(t * math.pi * 2))))
+    draw.line(wave, fill=INK, width=4)
+    # face: two eyes + smile
+    for dx in (-13 * s, 13 * s):
+        draw.ellipse((cx + dx - 4 * s, cy - 8 * s, cx + dx + 4 * s, cy + 2 * s), fill=INK)
+    draw.arc((cx - 11 * s, cy - 2 * s, cx + 11 * s, cy + 14 * s), 15, 165, fill=INK, width=4)
+
+
+def billboard(draw, x, y, w, h):
+    # poles
+    for px in (x + 40, x + w - 62):
+        draw.rectangle((px, y + h, px + 22, y + h + 110), fill=(120, 85, 50),
+                       outline=INK, width=4)
+    rrect(draw, (x, y, x + w, y + h), 10, WHITE, outline=INK, width=7)
+    rrect(draw, (x + 10, y + 10, x + w - 10, y + h - 10), 8, None,
+          outline=(230, 57, 70), width=4)
+    mini_ghost(draw, x + 62, y + h / 2, s=1.35)
+    f = fit_font(draw, "make.fun", w - 150, start=64)
+    box = draw.textbbox((0, 0), "make.fun", font=f)
+    th = box[3] - box[1]
+    draw.text((x + 118, y + h / 2 - th / 2 - box[1]), "make.fun", font=f, fill=INK)
+
+
+def avatar(draw, cx, feet_y):
+    """Blocky Roblox-style ghost avatar. Returns hand position (raised right hand)."""
+    # legs (blocky) + shoes
+    leg_w, leg_h = 52, 96
+    for dx in (-58, 6):
+        rrect(draw, (cx + dx, feet_y - leg_h, cx + dx + leg_w, feet_y - 18), 6,
+              PANTS, outline=INK, width=5)
+        rrect(draw, (cx + dx - 4, feet_y - 22, cx + dx + leg_w + 4, feet_y), 6,
+              SHOE, outline=INK, width=4)
+    # torso: blocky white with wavy ghost bottom
+    torso_top = feet_y - leg_h - 138
+    torso_bot = feet_y - leg_h + 14
+    tx0, tx1 = cx - 82, cx + 82
+    rrect(draw, (tx0, torso_top, tx1, torso_bot - 16), 10, WHITE, outline=INK, width=6)
+    wave = []
+    n = 40
+    for i in range(n + 1):
+        t = i / n
+        wave.append((tx0 + t * (tx1 - tx0),
+                     torso_bot - 16 + 14 * abs(math.sin(t * math.pi * 3))))
+    draw.polygon([(tx0, torso_bot - 18), (tx1, torso_bot - 18)] + wave[::-1], fill=WHITE)
+    draw.line(wave, fill=INK, width=5)
+    draw.line((tx0, torso_bot - 18, tx0, torso_bot - 16), fill=WHITE, width=8)
+    draw.line((tx1, torso_bot - 18, tx1, torso_bot - 16), fill=WHITE, width=8)
+
+    # left arm hanging down (blocky, slight angle)
+    draw.polygon([(tx0 - 6, torso_top + 8), (tx0 + 34, torso_top + 14),
+                  (tx0 + 16, torso_top + 128), (tx0 - 26, torso_top + 120)],
+                 fill=WHITE, outline=INK, width=5)
+    # right arm raised up-out holding the bag
+    hand = (cx + 168, torso_top - 66)
+    draw.polygon([(tx1 - 30, torso_top + 6), (tx1 + 8, torso_top + 16),
+                  (hand[0] + 16, hand[1] + 26), (hand[0] - 22, hand[1] + 8)],
+                 fill=WHITE, outline=INK, width=5)
+    # hand nub
+    draw.ellipse((hand[0] - 17, hand[1] - 17, hand[0] + 17, hand[1] + 17),
+                 fill=WHITE, outline=INK, width=5)
+
+    # head: blocky rounded square
+    head_w, head_h = 168, 152
+    hx0, hy0 = cx - head_w / 2, torso_top - head_h - 6
+    hx1, hy1 = cx + head_w / 2, torso_top - 6
+    rrect(draw, (hx0, hy0, hx1, hy1), 26, WHITE, outline=INK, width=7)
+
+    # cap: dome + brim
+    draw.pieslice((hx0 - 4, hy0 - 34, hx1 + 4, hy0 + 52), 180, 360,
+                  fill=CAP_RED, outline=INK, width=5)
+    rrect(draw, (hx0 - 26, hy0 + 2, hx1 + 26, hy0 + 22), 9, CAP_DARK,
+          outline=INK, width=5)
+    draw.ellipse((cx - 11, hy0 - 40, cx + 11, hy0 - 20), fill=CAP_DARK,
+                 outline=INK, width=4)
+
+    # sunglasses
+    sy = hy0 + 62
+    for gx0 in (cx - 66, cx + 12):
+        rrect(draw, (gx0, sy, gx0 + 54, sy + 40), 10, INK)
+        draw.line((gx0 + 10, sy + 30, gx0 + 26, sy + 10), fill=(120, 200, 255), width=6)
+    draw.rectangle((cx - 12, sy + 12, cx + 12, sy + 22), fill=INK)
+    draw.line((hx0 + 2, sy + 8, cx - 66, sy + 12), fill=INK, width=7)
+    draw.line((cx + 66, sy + 12, hx1 - 2, sy + 8), fill=INK, width=7)
+
+    # cheeks + smile
+    for dx in (-56, 40):
+        draw.ellipse((cx + dx, hy0 + 104, cx + dx + 30, hy0 + 122), fill=CHEEK)
+    draw.arc((cx - 24, hy0 + 96, cx + 24, hy0 + 134), 15, 165, fill=INK, width=6)
+    return hand
 
 
 def main():
-    img = Image.new("RGB", (GRID, GRID), SKY_TOP)
-    d = ImageDraw.Draw(img)
+    img = Image.new("RGB", (W, H), SKY_TOP)
+    draw = ImageDraw.Draw(img)
 
-    draw_background(d)
-    draw_barn(d, 10, 96)
-    draw_fence(d, 138)
-    draw_cow(d, 196, 128)
-    draw_chicken(d, 168, 146)
-    draw_chicken(d, 52, 150)
-    draw_sign(d, 170, 62)
-    draw_ghost_farmer(d, 128, 158)
+    # sky gradient
+    for y in range(0, 660):
+        t = y / 660
+        c = tuple(int(SKY_TOP[i] + (SKY_BOT[i] - SKY_TOP[i]) * t) for i in range(3))
+        draw.line((0, y, W, y), fill=c)
 
-    # five wanted stars, top-right corner (below the top text)
+    # square-ish sun (top-left, behind text zone edge)
+    rrect(draw, (36, 196, 150, 310), 22, SUN, outline=SUN_EDGE, width=7)
+    rrect(draw, (56, 216, 130, 290), 16, (255, 231, 120))
+
+    # blocky clouds
+    blocky_cloud(draw, 300, 250, 1.0)
+    blocky_cloud(draw, 560, 215, 0.8)
+    blocky_cloud(draw, 880, 300, 0.9)
+    blocky_cloud(draw, 150, 380, 0.7)
+
+    # background buildings along the horizon
+    horizon = 660
+    building(draw, 8, horizon, 120, 210, (255, 107, 107), (200, 60, 60))
+    building(draw, 140, horizon, 96, 150, (78, 205, 196), (40, 160, 150))
+    building(draw, 770, horizon, 110, 190, (255, 217, 61), (210, 170, 20))
+    building(draw, 892, horizon, 120, 240, (167, 139, 250), (120, 90, 220))
+
+    # palms
+    palm(draw, 270, horizon, h=230, flip=1)
+    palm(draw, 730, horizon, h=205, flip=-1)
+
+    # ground: studded baseplate + road
+    baseplate(draw, horizon, 806)
+    road(draw, 716, 790)
+
+    # billboard (right side, above horizon line)
+    billboard(draw, 636, 356, 348, 150)
+
+    # main character standing on the road
+    hand = avatar(draw, 400, 792)
+    money_bag(draw, hand[0] + 6, hand[1] - 34, s=1.05)
+
+    # wanted stars, top-right under the headline
     for i in range(5):
-        draw_star(d, 192 + i * 13, 54, 6)
+        star(draw, 782 + i * 54, 224, 26)
 
-    # meme text
-    pixel_text(img, "GTA 6 TOOK 13 YEARS", GRID // 2, 4, 17)
-    pixel_text(img, "TO DROP", GRID // 2, 24, 17)
-    pixel_text(img, "MY AI AGENT MADE MONEY", GRID // 2, 218, 15)
-    pixel_text(img, "IN 3 DAYS ON make.fun", GRID // 2, 236, 15)
+    # --- meme text ---
+    f1 = fit_font(draw, "GTA 6 TOOK 13 YEARS", 980, start=104)
+    outlined_text(draw, W / 2, 14, "GTA 6 TOOK 13 YEARS", f1)
+    f2 = fit_font(draw, "TO DROP", 980, start=104)
+    outlined_text(draw, W / 2, 122, "TO DROP", f2)
 
-    big = img.resize((GRID * SCALE, GRID * SCALE), Image.NEAREST)
-    big.save(OUT, optimize=True)
-    print(f"wrote {OUT}")
+    f3 = fit_font(draw, "MY AI AGENT MADE MONEY", 980, start=96)
+    outlined_text(draw, W / 2, 828, "MY AI AGENT MADE MONEY", f3)
+    f4 = fit_font(draw, "IN 3 DAYS ON make.fun", 980, start=96)
+    outlined_text(draw, W / 2, 924, "IN 3 DAYS ON make.fun", f4)
+
+    img.save("meme.png", optimize=True)
+    print("wrote meme.png")
 
 
 if __name__ == "__main__":
